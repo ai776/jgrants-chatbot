@@ -44,6 +44,10 @@ const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://localhost:8000';
 
 async function callMCPTool(toolName: string, args: Record<string, any>): Promise<any> {
   try {
+    console.log(`[MCP] Calling tool: ${toolName}`);
+    console.log(`[MCP] MCP_SERVER_URL: ${MCP_SERVER_URL}`);
+    console.log(`[MCP] Arguments:`, args);
+
     const response = await fetch(`${MCP_SERVER_URL}/mcp`, {
       method: 'POST',
       headers: {
@@ -61,13 +65,17 @@ async function callMCPTool(toolName: string, args: Record<string, any>): Promise
     });
 
     if (!response.ok) {
+      console.error(`[MCP] Server error: ${response.status} ${response.statusText}`);
+      const errorText = await response.text();
+      console.error(`[MCP] Error response:`, errorText);
       throw new Error(`MCP server error: ${response.statusText}`);
     }
 
     const data = await response.json();
+    console.log(`[MCP] Response:`, data);
     return data.result?.content?.[0]?.text ? JSON.parse(data.result.content[0].text) : data.result;
   } catch (error) {
-    console.error('MCP call error:', error);
+    console.error('[MCP] Call error:', error);
     throw error;
   }
 }
