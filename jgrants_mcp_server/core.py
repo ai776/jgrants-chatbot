@@ -419,8 +419,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Jグランツ補助金検索MCPサーバー")
     parser.add_argument("--mode", default="http", choices=["http", "stdio"], help="実行モード")
-    parser.add_argument("--host", default="0.0.0.0", help="HTTPサーバーのホスト")
-    parser.add_argument("--port", type=int, default=8000, help="HTTPサーバーのポート")
+    parser.add_argument("--host", default=os.getenv("HOST", "0.0.0.0"), help="HTTPサーバーのホスト")
+    parser.add_argument("--port", type=int, default=int(os.getenv("PORT", 8000)), help="HTTPサーバーのポート")
 
     args = parser.parse_args()
 
