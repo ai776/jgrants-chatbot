@@ -41,13 +41,10 @@ interface JGrantsDetailResponse {
 }
 
 const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://localhost:8000';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 async function callMCPTool(toolName: string, args: Record<string, any>): Promise<any> {
   try {
-    console.log(`[MCP] Calling tool: ${toolName}`);
-    console.log(`[MCP] MCP_SERVER_URL: ${MCP_SERVER_URL}`);
-    console.log(`[MCP] Arguments:`, args);
-
     const response = await fetch(`${MCP_SERVER_URL}/mcp`, {
       method: 'POST',
       headers: {
@@ -65,17 +62,46 @@ async function callMCPTool(toolName: string, args: Record<string, any>): Promise
     });
 
     if (!response.ok) {
-      console.error(`[MCP] Server error: ${response.status} ${response.statusText}`);
-      const errorText = await response.text();
-      console.error(`[MCP] Error response:`, errorText);
       throw new Error(`MCP server error: ${response.statusText}`);
     }
 
     const data = await response.json();
-    console.log(`[MCP] Response:`, data);
     return data.result?.content?.[0]?.text ? JSON.parse(data.result.content[0].text) : data.result;
   } catch (error) {
-    console.error('[MCP] Call error:', error);
+    console.error('MCP call error:', error);
+    throw error;
+  }
+}
+
+async function callOpenAI(messages: Array<{ role: string; content: string }>): Promise<string> {
+  if (!OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is not set');
+  }
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: messages,
+        temperature: 0.7,
+        max_tokens: 2000,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OpenAI API error: ${error}`);
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+  } catch (error) {
+    console.error('OpenAI call error:', error);
     throw error;
   }
 }
@@ -312,37 +338,121 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 意図を分析
-    const { intent, params } = analyzeIntent(message);
+    // If OpenAI API is not available, use fallback mode
+    if (!OPENAI_API_KEY) {
+      console.warn('OPENAI_API_KEY not set, using fallback mode');
+      // Fallback to simple keyword-based search
+      const mcpResponse = await callMCPTool('search_subsidies', {
+        keyword: '事業',
+        sort: 'created',
+        order: 'desc',
+        acceptance: 1,
+        limit: 10,
+      });
+      const formattedResponse = formatSearchResults(mcpResponse);
+      return NextResponse.json({
+        response: formattedResponse,
+        raw: mcpResponse,
+      });
+    }
 
-    // MCPサーバーを呼び出し
+    // Use OpenAI to understand user intent and extract keywords
+    const systemPrompt = `あなたはJグランツ補助金検索のアシスタントです。ユーザーの質問を分析して、以下のいずれかのアクションを決定してください：
+
+1. search: キーワード検索
+2. detail: 補助金IDから詳細を取得
+3. statistics: 統計情報を取得
+
+ユーザーの質問から、実行するアクション名と、必要なパラメータ(keyword, subsidy_id など)をJSON形式で返してください。
+
+例：
+ユーザー質問: "最新の補助金を教えて"
+応答: {"action": "search", "keyword": "事業", "sort": "created"}
+
+ユーザー質問: "東京都の製造業向け補助金はある?"
+応答: {"action": "search", "keyword": "製造業", "area": "東京"}`;
+
+    const intentMessages = [
+      {
+        role: 'system',
+        content: systemPrompt,
+      },
+      {
+        role: 'user',
+        content: message,
+      },
+    ];
+
+    // Get intent from OpenAI
+    const intentResponse = await callOpenAI(intentMessages);
+    let actionData;
+
+    try {
+      actionData = JSON.parse(intentResponse);
+    } catch {
+      // If JSON parsing fails, default to search
+      actionData = { action: 'search', keyword: message };
+    }
+
     let mcpResponse;
     let formattedResponse;
 
-    switch (intent) {
-      case 'search_latest':
-      case 'search':
-        mcpResponse = await callMCPTool('search_subsidies', params);
-        formattedResponse = formatSearchResults(mcpResponse);
-        break;
-
-      case 'get_detail':
-        mcpResponse = await callMCPTool('get_subsidy_detail', params);
+    switch (actionData.action) {
+      case 'detail': {
+        mcpResponse = await callMCPTool('get_subsidy_detail', {
+          subsidy_id: actionData.subsidy_id,
+        });
         formattedResponse = formatDetailResult(mcpResponse);
         break;
+      }
 
-      case 'get_statistics':
-        mcpResponse = await callMCPTool('get_subsidy_statistics', params);
+      case 'statistics': {
+        mcpResponse = await callMCPTool('get_subsidy_statistics', {
+          keyword: actionData.keyword || '事業',
+          acceptance: 1,
+          output_format: 'summary',
+        });
         formattedResponse = formatStatisticsResult(mcpResponse);
         break;
+      }
 
-      default:
-        mcpResponse = await callMCPTool('search_subsidies', params);
+      case 'search':
+      default: {
+        mcpResponse = await callMCPTool('search_subsidies', {
+          keyword: actionData.keyword || '事業',
+          sort: actionData.sort || 'created',
+          order: actionData.order || 'desc',
+          acceptance: 1,
+          limit: 15,
+        });
         formattedResponse = formatSearchResults(mcpResponse);
+        break;
+      }
     }
 
+    // Generate natural response using OpenAI
+    const contextMessages = [
+      {
+        role: 'system',
+        content: `あなたはJグランツ補助金検索のアシスタントです。ユーザーの質問に対して、取得した補助金情報を基に、自然で分かりやすい日本語で回答してください。
+        
+情報には絵文字を含んでいるので、そのまま使用してください。`,
+      },
+      {
+        role: 'user',
+        content: `ユーザーの質問: "${message}"
+
+取得した補助金情報:
+${formattedResponse}
+
+この情報を基に、ユーザーに分かりやすく説明してください。`,
+      },
+    ];
+
+    const naturalResponse = await callOpenAI(contextMessages);
+
     return NextResponse.json({
-      response: formattedResponse,
+      response: naturalResponse,
       raw: mcpResponse,
     });
   } catch (error) {
@@ -350,7 +460,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         error: 'サーバーエラーが発生しました',
-        response: '申し訳ございません。エラーが発生しました。MCPサーバーが起動しているか確認してください。',
+        response: '申し訳ございません。エラーが発生しました。\n\nMCPサーバーとOpenAI APIの接続を確認してください。',
       },
       { status: 500 }
     );
