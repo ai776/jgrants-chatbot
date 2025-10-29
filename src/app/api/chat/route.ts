@@ -340,13 +340,17 @@ export async function POST(request: NextRequest) {
     }
 
     // Log environment variables (safe logging)
-    console.log('API Key present:', !!OPENAI_API_KEY);
+    const hasOpenAIKey = !!OPENAI_API_KEY;
+    console.log('=== CHAT API DEBUG ===');
+    console.log('OpenAI API Key present:', hasOpenAIKey);
     console.log('MCP URL:', MCP_SERVER_URL);
+    console.log('User message:', message.substring(0, 50));
 
     // If OpenAI API is not available, use fallback mode
     if (!OPENAI_API_KEY) {
-      console.warn('OPENAI_API_KEY not set, using fallback mode');
+      console.warn('⚠️ OPENAI_API_KEY not set, using fallback mode');
       try {
+        console.log('Calling MCP search_subsidies...');
         const mcpResponse = await callMCPTool('search_subsidies', {
           keyword: '事業',
           sort: 'created',
@@ -354,17 +358,18 @@ export async function POST(request: NextRequest) {
           acceptance: 1,
           limit: 10,
         });
+        console.log('✅ MCP response received');
         const formattedResponse = formatSearchResults(mcpResponse);
         return NextResponse.json({
           response: formattedResponse,
           raw: mcpResponse,
         });
       } catch (mcpError) {
-        console.error('MCP Fallback error:', mcpError);
+        console.error('❌ MCP Fallback error:', mcpError);
         return NextResponse.json(
           {
             error: 'サーバーエラーが発生しました',
-            response: '申し訳ございません。\n\n【設定に問題があります】\n- OpenAI APIキーが設定されていません\n- MCPサーバーに接続できません\n\n管理者に連絡してください。',
+            response: '申し訳ございません。\n\n【設定に問題があります】\n- OpenAI APIキーが設定されていません\n- または、MCPサーバーに接続できません\n\nMCPサーバーのURL: ' + MCP_SERVER_URL + '\n\n管理者に連絡してください。',
           },
           { status: 500 }
         );
@@ -401,13 +406,15 @@ export async function POST(request: NextRequest) {
     // Get intent from OpenAI
     let intentResponse;
     try {
+      console.log('🔄 Calling OpenAI for intent detection...');
       intentResponse = await callOpenAI(intentMessages);
+      console.log('✅ OpenAI intent received');
     } catch (openaiError) {
-      console.error('OpenAI intent detection failed:', openaiError);
+      console.error('❌ OpenAI intent detection failed:', openaiError);
       return NextResponse.json(
         {
           error: 'OpenAI APIエラー',
-          response: '申し訳ございません。OpenAI APIに接続できません。\n\nOpenAI APIキーを確認してください。',
+          response: '申し訳ございません。OpenAI APIに接続できません。\n\nOpenAI APIキーを確認してください。\n\nエラー: ' + (openaiError instanceof Error ? openaiError.message : String(openaiError)),
         },
         { status: 500 }
       );
@@ -417,7 +424,9 @@ export async function POST(request: NextRequest) {
 
     try {
       actionData = JSON.parse(intentResponse);
-    } catch {
+      console.log('📋 Action data parsed:', actionData);
+    } catch (parseError) {
+      console.warn('⚠️ JSON parsing failed, defaulting to search');
       // If JSON parsing fails, default to search
       actionData = { action: 'search', keyword: message };
     }
@@ -426,6 +435,7 @@ export async function POST(request: NextRequest) {
     let formattedResponse;
 
     try {
+      console.log('🔄 Calling MCP tool:', actionData.action);
       switch (actionData.action) {
         case 'detail': {
           mcpResponse = await callMCPTool('get_subsidy_detail', {
@@ -458,12 +468,13 @@ export async function POST(request: NextRequest) {
           break;
         }
       }
+      console.log('✅ MCP tool completed');
     } catch (mcpError) {
-      console.error('MCP tool call failed:', mcpError);
+      console.error('❌ MCP tool call failed:', mcpError);
       return NextResponse.json(
         {
           error: 'MCPサーバーエラー',
-          response: '申し訳ございません。補助金データを取得できません。\n\nMCPサーバーが起動しているか確認してください。',
+          response: '申し訳ございません。補助金データを取得できません。\n\nMCPサーバーが起動しているか確認してください。\n\nMCPサーバーのURL: ' + MCP_SERVER_URL + '\n\nエラー: ' + (mcpError instanceof Error ? mcpError.message : String(mcpError)),
         },
         { status: 500 }
       );
@@ -474,7 +485,7 @@ export async function POST(request: NextRequest) {
       {
         role: 'system',
         content: `あなたはJグランツ補助金検索のアシスタントです。ユーザーの質問に対して、取得した補助金情報を基に、自然で分かりやすい日本語で回答してください。
-
+        
 情報には絵文字を含んでいるので、そのまま使用してください。`,
       },
       {
@@ -490,19 +501,22 @@ ${formattedResponse}
 
     let naturalResponse;
     try {
+      console.log('🔄 Generating natural response with OpenAI...');
       naturalResponse = await callOpenAI(contextMessages);
+      console.log('✅ Natural response generated');
     } catch (openaiError) {
-      console.error('OpenAI response generation failed:', openaiError);
+      console.error('❌ OpenAI response generation failed:', openaiError);
       // Fallback to formatted response if natural response generation fails
       naturalResponse = formattedResponse;
     }
 
+    console.log('✅ Chat API completed successfully');
     return NextResponse.json({
       response: naturalResponse,
       raw: mcpResponse,
     });
   } catch (error) {
-    console.error('Chat API error:', error);
+    console.error('❌ Chat API error:', error);
     return NextResponse.json(
       {
         error: 'サーバーエラーが発生しました',
