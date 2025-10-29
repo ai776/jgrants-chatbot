@@ -49,6 +49,7 @@ async function callMCPTool(toolName: string, args: Record<string, any>): Promise
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream',
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -473,7 +474,7 @@ export async function POST(request: NextRequest) {
       {
         role: 'system',
         content: `あなたはJグランツ補助金検索のアシスタントです。ユーザーの質問に対して、取得した補助金情報を基に、自然で分かりやすい日本語で回答してください。
-        
+
 情報には絵文字を含んでいるので、そのまま使用してください。`,
       },
       {
