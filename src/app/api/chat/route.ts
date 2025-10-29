@@ -338,22 +338,36 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Log environment variables (safe logging)
+    console.log('API Key present:', !!OPENAI_API_KEY);
+    console.log('MCP URL:', MCP_SERVER_URL);
+
     // If OpenAI API is not available, use fallback mode
     if (!OPENAI_API_KEY) {
       console.warn('OPENAI_API_KEY not set, using fallback mode');
-      // Fallback to simple keyword-based search
-      const mcpResponse = await callMCPTool('search_subsidies', {
-        keyword: '事業',
-        sort: 'created',
-        order: 'desc',
-        acceptance: 1,
-        limit: 10,
-      });
-      const formattedResponse = formatSearchResults(mcpResponse);
-      return NextResponse.json({
-        response: formattedResponse,
-        raw: mcpResponse,
-      });
+      try {
+        const mcpResponse = await callMCPTool('search_subsidies', {
+          keyword: '事業',
+          sort: 'created',
+          order: 'desc',
+          acceptance: 1,
+          limit: 10,
+        });
+        const formattedResponse = formatSearchResults(mcpResponse);
+        return NextResponse.json({
+          response: formattedResponse,
+          raw: mcpResponse,
+        });
+      } catch (mcpError) {
+        console.error('MCP Fallback error:', mcpError);
+        return NextResponse.json(
+          {
+            error: 'サーバーエラーが発生しました',
+            response: '申し訳ございません。\n\n【設定に問題があります】\n- OpenAI APIキーが設定されていません\n- MCPサーバーに接続できません\n\n管理者に連絡してください。',
+          },
+          { status: 500 }
+        );
+      }
     }
 
     // Use OpenAI to understand user intent and extract keywords
@@ -384,7 +398,20 @@ export async function POST(request: NextRequest) {
     ];
 
     // Get intent from OpenAI
-    const intentResponse = await callOpenAI(intentMessages);
+    let intentResponse;
+    try {
+      intentResponse = await callOpenAI(intentMessages);
+    } catch (openaiError) {
+      console.error('OpenAI intent detection failed:', openaiError);
+      return NextResponse.json(
+        {
+          error: 'OpenAI APIエラー',
+          response: '申し訳ございません。OpenAI APIに接続できません。\n\nOpenAI APIキーを確認してください。',
+        },
+        { status: 500 }
+      );
+    }
+
     let actionData;
 
     try {
@@ -397,37 +424,48 @@ export async function POST(request: NextRequest) {
     let mcpResponse;
     let formattedResponse;
 
-    switch (actionData.action) {
-      case 'detail': {
-        mcpResponse = await callMCPTool('get_subsidy_detail', {
-          subsidy_id: actionData.subsidy_id,
-        });
-        formattedResponse = formatDetailResult(mcpResponse);
-        break;
-      }
+    try {
+      switch (actionData.action) {
+        case 'detail': {
+          mcpResponse = await callMCPTool('get_subsidy_detail', {
+            subsidy_id: actionData.subsidy_id,
+          });
+          formattedResponse = formatDetailResult(mcpResponse);
+          break;
+        }
 
-      case 'statistics': {
-        mcpResponse = await callMCPTool('get_subsidy_statistics', {
-          keyword: actionData.keyword || '事業',
-          acceptance: 1,
-          output_format: 'summary',
-        });
-        formattedResponse = formatStatisticsResult(mcpResponse);
-        break;
-      }
+        case 'statistics': {
+          mcpResponse = await callMCPTool('get_subsidy_statistics', {
+            keyword: actionData.keyword || '事業',
+            acceptance: 1,
+            output_format: 'summary',
+          });
+          formattedResponse = formatStatisticsResult(mcpResponse);
+          break;
+        }
 
-      case 'search':
-      default: {
-        mcpResponse = await callMCPTool('search_subsidies', {
-          keyword: actionData.keyword || '事業',
-          sort: actionData.sort || 'created',
-          order: actionData.order || 'desc',
-          acceptance: 1,
-          limit: 15,
-        });
-        formattedResponse = formatSearchResults(mcpResponse);
-        break;
+        case 'search':
+        default: {
+          mcpResponse = await callMCPTool('search_subsidies', {
+            keyword: actionData.keyword || '事業',
+            sort: actionData.sort || 'created',
+            order: actionData.order || 'desc',
+            acceptance: 1,
+            limit: 15,
+          });
+          formattedResponse = formatSearchResults(mcpResponse);
+          break;
+        }
       }
+    } catch (mcpError) {
+      console.error('MCP tool call failed:', mcpError);
+      return NextResponse.json(
+        {
+          error: 'MCPサーバーエラー',
+          response: '申し訳ございません。補助金データを取得できません。\n\nMCPサーバーが起動しているか確認してください。',
+        },
+        { status: 500 }
+      );
     }
 
     // Generate natural response using OpenAI
@@ -435,7 +473,7 @@ export async function POST(request: NextRequest) {
       {
         role: 'system',
         content: `あなたはJグランツ補助金検索のアシスタントです。ユーザーの質問に対して、取得した補助金情報を基に、自然で分かりやすい日本語で回答してください。
-
+        
 情報には絵文字を含んでいるので、そのまま使用してください。`,
       },
       {
@@ -449,7 +487,14 @@ ${formattedResponse}
       },
     ];
 
-    const naturalResponse = await callOpenAI(contextMessages);
+    let naturalResponse;
+    try {
+      naturalResponse = await callOpenAI(contextMessages);
+    } catch (openaiError) {
+      console.error('OpenAI response generation failed:', openaiError);
+      // Fallback to formatted response if natural response generation fails
+      naturalResponse = formattedResponse;
+    }
 
     return NextResponse.json({
       response: naturalResponse,
@@ -460,7 +505,7 @@ ${formattedResponse}
     return NextResponse.json(
       {
         error: 'サーバーエラーが発生しました',
-        response: '申し訳ございません。エラーが発生しました。\n\nMCPサーバーとOpenAI APIの接続を確認してください。',
+        response: '申し訳ございません。予期しないエラーが発生しました。\n\n詳細：' + (error instanceof Error ? error.message : String(error)),
       },
       { status: 500 }
     );
