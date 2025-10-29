@@ -416,6 +416,7 @@ async def usage_guidelines():
 
 if __name__ == "__main__":
     import argparse
+    import uvicorn
 
     parser = argparse.ArgumentParser(description="Jグランツ補助金検索MCPサーバー")
     parser.add_argument("--mode", default="http", choices=["http", "stdio"], help="実行モード")
@@ -426,6 +427,17 @@ if __name__ == "__main__":
 
     if args.mode == "http":
         print(f"Jグランツ MCPサーバーを起動中: http://{args.host}:{args.port}/mcp")
-        mcp.run(transport="streamable-http", host=args.host, port=args.port)
+        # Use uvicorn directly with proper host/port binding
+        try:
+            # Try to use uvicorn.run directly
+            uvicorn.run(
+                mcp.app,
+                host=args.host,
+                port=args.port,
+                log_level="info"
+            )
+        except Exception:
+            # Fallback to mcp.run if app attribute doesn't exist
+            mcp.run(transport="streamable-http", host=args.host, port=args.port)
     else:
         mcp.run(transport="stdio")
