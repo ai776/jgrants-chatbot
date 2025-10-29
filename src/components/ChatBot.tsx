@@ -9,16 +9,23 @@ interface Message {
 }
 
 export default function ChatBot() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: 'assistant',
-      content: 'こんにちは！Jグランツ補助金検索ボットです。補助金に関する質問をお気軽にどうぞ。例: 「最新の補助金を教えて」「東京都の製造業向け補助金はある?」',
-      timestamp: new Date(),
-    },
-  ]);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Initialize messages after hydration
+    setMessages([
+      {
+        role: 'assistant',
+        content: 'こんにちは！Jグランツ補助金検索ボットです。補助金に関する質問をお気軽にどうぞ。例: 「最新の補助金を教えて」「東京都の製造業向け補助金はある?」',
+        timestamp: new Date(),
+      },
+    ]);
+    setIsHydrated(true);
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -83,6 +90,30 @@ export default function ChatBot() {
       minute: '2-digit',
     });
   };
+
+  // Prevent hydration mismatch by not rendering until hydrated
+  if (!isHydrated) {
+    return (
+      <div className="chat-container">
+        <div className="chat-header">
+          <h1>Jグランツ補助金検索ボット</h1>
+          <p>補助金情報を自然言語で検索できます</p>
+        </div>
+        <div className="messages-container" />
+        <form className="input-container">
+          <input
+            type="text"
+            placeholder="例: 「最新の補助金を教えて」"
+            disabled={true}
+            className="chat-input"
+          />
+          <button type="submit" disabled={true} className="send-button">
+            送信
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="chat-container">
